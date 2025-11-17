@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any
 import matcher
@@ -6,6 +7,15 @@ import io
 import sys
 
 app = FastAPI(title="HVAC Scheduler API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class Technician(BaseModel):
     id: int
@@ -39,26 +49,20 @@ def health_check():
 
 @app.post("/api/schedule")
 def create_schedule(request: ScheduleRequest):
-    # Capture print output from matcher.py
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
     
     try:
-        # Convert Pydantic models to dicts
         techs = [t.dict() for t in request.technicians]
         jobs_list = [j.dict() for j in request.jobs]
         
-        # Update matcher.py's global variables
         matcher.technicians = techs
         matcher.jobs = jobs_list
         
-        # Run the simulation
         success = matcher.run_simulation()
         
-        # Get the output
         output = buffer.getvalue()
         
-        # Return the results
         return {
             "success": success,
             "output": output,
@@ -74,5 +78,4 @@ def create_schedule(request: ScheduleRequest):
         }
     
     finally:
-        # Restore stdout
         sys.stdout = old_stdout
