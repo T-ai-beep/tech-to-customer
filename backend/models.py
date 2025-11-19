@@ -128,9 +128,22 @@ class Assignment(Base):
 def get_engine(database_url=None):
     """Create database engine"""
     if database_url is None:
-        # Default to local PostgreSQL
-        database_url = "postgresql://localhost/hvac_dispatch"
-    return create_engine(database_url, echo=True)
+        database_url = get_database_url()
+    
+    # Handle Railway/Heroku postgres:// -> postgresql://
+    if database_url and database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    
+    # REPLACE THIS ENTIRE RETURN STATEMENT:
+    return create_engine(
+        database_url, 
+        echo=True,
+        pool_pre_ping=True,
+        connect_args={
+            "connect_timeout": 30,
+            "options": "-c statement_timeout=30000"
+        }
+    )
 
 def get_session(engine):
     """Create database session"""
