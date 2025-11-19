@@ -1,4 +1,6 @@
 # models.py
+import os
+from dotenv import load_dotenv
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, 
     DateTime, JSON, ForeignKey, Text, Enum as SQLEnum
@@ -7,6 +9,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 import enum
+
+# Load environment variables
+load_dotenv()
 
 Base = declarative_base()
 
@@ -38,7 +43,6 @@ class Customer(Base):
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships
     jobs = relationship("Job", back_populates="customer")
 
 class Technician(Base):
@@ -48,10 +52,10 @@ class Technician(Base):
     name = Column(String(200), nullable=False)
     phone = Column(String(20), nullable=False)
     email = Column(String(200))
-    skills = Column(JSON, nullable=False, default=list)  # ["hvac", "residential"]
-    certifications = Column(JSON, default=list)  # ["EPA_608", "NATE"]
-    equipment = Column(JSON, default=list)  # ["recovery_machine", "gauges"]
-    shift_start = Column(Integer, default=8)  # Hour (0-23)
+    skills = Column(JSON, nullable=False, default=list)
+    certifications = Column(JSON, default=list)
+    equipment = Column(JSON, default=list)
+    shift_start = Column(Integer, default=8)
     shift_end = Column(Integer, default=17)
     on_call = Column(Boolean, default=False)
     current_latitude = Column(Float)
@@ -60,7 +64,6 @@ class Technician(Base):
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships
     assignments = relationship("Assignment", back_populates="technician")
 
 class Job(Base):
@@ -69,42 +72,34 @@ class Job(Base):
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
     
-    # Job details
-    title = Column(String(200))  # "AC Not Cooling"
+    title = Column(String(200))
     description = Column(Text)
-    required_skills = Column(JSON, nullable=False)  # ["hvac", "residential"]
+    required_skills = Column(JSON, nullable=False)
     priority = Column(SQLEnum(Priority), nullable=False, default=Priority.ROUTINE)
     status = Column(SQLEnum(JobStatus), nullable=False, default=JobStatus.PENDING)
     
-    # Location
     address = Column(Text)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     
-    # Timing
     submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    scheduled_for = Column(DateTime)  # If customer requested specific time
+    scheduled_for = Column(DateTime)
     assigned_at = Column(DateTime)
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     
-    # Estimates vs Actuals
     estimated_hours = Column(Float, nullable=False)
     actual_hours = Column(Float)
     estimated_arrival = Column(DateTime)
     
-    # Assignment
     assigned_to = Column(Integer, ForeignKey('technicians.id'))
     
-    # SLA
     sla_met = Column(Boolean)
-    response_time_hours = Column(Float)  # Time from submission to start
+    response_time_hours = Column(Float)
     
-    # Equipment/Parts
-    equipment_details = Column(JSON)  # {"brand": "Carrier", "model": "XYZ"}
+    equipment_details = Column(JSON)
     parts_needed = Column(JSON, default=list)
     
-    # Relationships
     customer = relationship("Customer", back_populates="jobs")
     assignment = relationship("Assignment", back_populates="job", uselist=False)
 
@@ -116,27 +111,27 @@ class Assignment(Base):
     tech_id = Column(Integer, ForeignKey('technicians.id'), nullable=False)
     
     assigned_at = Column(DateTime, default=datetime.utcnow)
-    distance_miles = Column(Float)  # Distance from tech to job
-    travel_time_hours = Column(Float)  # Calculated travel time
-    match_score = Column(Float)  # Your matching algorithm score
+    distance_miles = Column(Float)
+    travel_time_hours = Column(Float)
+    match_score = Column(Float)
     
-    # Relationships
     job = relationship("Job", back_populates="assignment")
     technician = relationship("Technician", back_populates="assignments")
 
-# Database connection
+# Database connection functions
 def get_engine(database_url=None):
     """Create database engine"""
     if database_url is None:
-        database_url = get_database_url()
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL not set in environment")
     
-    # Handle Railway/Heroku postgres:// -> postgresql://
-    if database_url and database_url.startswith('postgres://'):
+    # Handle old postgres:// URLs
+    if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
     
-    # REPLACE THIS ENTIRE RETURN STATEMENT:
     return create_engine(
-        database_url, 
+        database_url,
         echo=True,
         pool_pre_ping=True,
         connect_args={
@@ -156,6 +151,5 @@ def init_db(engine):
     print("✅ Database tables created successfully")
 
 if __name__ == "__main__":
-    # Test database creation
     engine = get_engine()
     init_db(engine)
