@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+        --spacing: 0.25rem; 
+        --radius-xs: calc(var(--spacing) * 2);
+        --radius-sm: calc(var(--spacing) * 3);
+        --radius-md: calc(var(--spacing) * 4);
+        --radius-lg: calc(var(--spacing) * 6);
+        --radius-xl: calc(var(--spacing) * 8);
+        --radius-2xl: calc(var(--spacing) * 12);
+        --default-transition-duration: 300ms;
+        --color-background: var(--color-gray-100);
+        --color-primary: var(--color-gray-200);
+        --color-secondary: var(--color-gray-300);
+        --color-tertiary: var(--color-gray-400);
+        --color-accent: var(--color-indigo-200);
+        --color-muted: var(--color-gray-100);
+        --color-destructive: var(--color-red-200);
+        --color-destructive-border: var(--color-red-500);
+        --color-destructive-text: var(--color-red-600);
+        --color-warning: var(--color-yellow-200);
+        --color-warning-border: var(--color-yellow-500);
+        --color-warning-text: var(--color-yellow-700);
+        --color-success: var(--color-green-300);
+        --color-success-border: var(--color-green-600);
+        --color-success-text: var(--color-green-700);
+        --color-info: var(--color-blue-500);
+        --color-border: var(--color-gray-500);
+        --color-ring: var(--color-border);
+      }
+
+
+@utility no-scrollbar {
+        &::-webkit-scrollbar {
+          display: none;
+        }
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      button {
+        @apply cursor-pointer;
+      }
+
+@layer base {
+  * {
+    /* Use explicit CSS variables for border and outline colors instead of Tailwind utilities
+       (the custom utilities `border-border` and `outline-ring/50` are not defined). */
+    border-color: var(--color-border);
+    outline-color: var(--color-ring);
+  }
+  body {
+    background: var(--color-background, var(--background));
+    color: var(--color-foreground, var(--foreground));
+  }
+}
