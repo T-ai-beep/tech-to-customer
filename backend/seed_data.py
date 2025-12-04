@@ -1,125 +1,108 @@
-# seed_data.py
-from models import get_engine, get_session, init_db, Priority
-from database import DatabaseHelper
-from datetime import datetime, timedelta
+# backend/seed_data.py
+"""
+Seed the HVAC Dispatch System database with realistic test data
+"""
 
+from datetime import datetime, timedelta
+import random
+
+from backend.models import get_engine, get_session, init_db, Priority, JobStatus
+from backend.database import DatabaseHelper
+
+# --- Config ---
+NUM_CUSTOMERS = 5
+NUM_TECHS = 5
+NUM_JOBS = 10
+SKILLS_POOL = ["hvac", "residential", "commercial", "electrical", "plumbing"]
+
+# --- Helper Functions ---
+def random_location():
+    """Return random lat/lon around Austin for testing"""
+    return round(random.uniform(30.25, 30.30), 6), round(random.uniform(-97.75, -97.72), 6)
+
+def random_datetime(days_back=30):
+    """Return random datetime within past `days_back` days"""
+    return datetime.utcnow() - timedelta(days=random.randint(0, days_back), hours=random.randint(0, 23))
+
+# --- Seed Script ---
 def seed_database():
-    """Populate database with test data"""
     engine = get_engine()
     init_db(engine)
-    session = get_session(engine)
+    session = get_session()
     db = DatabaseHelper(session)
-    
-    print("🌱 Seeding database with test data...")
-    
-    # Create customers
-    customers = [
-        db.create_customer(
-            name="John Smith",
-            phone="512-555-0101",
-            address="123 Main St, Austin TX 78701",
-            lat=30.2672,
-            lon=-97.7431,
-            email="john@example.com"
-        ),
-        db.create_customer(
-            name="Jane Doe",
-            phone="512-555-0102",
-            address="456 Oak Ave, Austin TX 78702",
-            lat=30.2741,
-            lon=-97.7306
-        ),
-        db.create_customer(
-            name="Bob Johnson",
-            phone="512-555-0103",
-            address="789 Elm St, Austin TX 78703",
-            lat=30.2808,
-            lon=-97.7461
-        ),
-    ]
+
+    print("🌱 Seeding database...")
+
+    # ---------------- CUSTOMERS ----------------
+    customers = []
+    for i in range(NUM_CUSTOMERS):
+        lat, lon = random_location()
+        cust = db.create_customer(
+            name=f"Customer {i+1}",
+            phone=f"512-555-01{str(i+10)}",
+            address=f"{100+i} Main St, Austin TX 7870{i}",
+            email=f"customer{i+1}@example.com",
+            lat=lat,
+            lon=lon
+        )
+        customers.append(cust)
     print(f"✅ Created {len(customers)} customers")
-    
-    # Create technicians
-    techs = [
-        db.create_technician(
-            name="Mike Rodriguez",
-            phone="512-555-0201",
-            skills=["hvac", "residential", "commercial"],
-            certifications=["EPA_608_Type_II", "NATE_Certified"],
-            equipment=["recovery_machine", "manifold_gauges", "vacuum_pump"],
-            current_latitude=30.2672,
-            current_longitude=-97.7431,
-            shift_start=8,
-            shift_end=17
-        ),
-        db.create_technician(
-            name="Sarah Chen",
-            phone="512-555-0202",
-            skills=["hvac", "residential", "heat_pumps"],
-            certifications=["EPA_608_Universal", "NATE_Certified"],
-            equipment=["recovery_machine", "leak_detector"],
-            current_latitude=30.2808,
-            current_longitude=-97.7461,
-            shift_start=8,
-            shift_end=17
-        ),
-        db.create_technician(
-            name="Carlos Martinez",
-            phone="512-555-0203",
-            skills=["hvac", "commercial", "refrigeration"],
-            certifications=["EPA_608_Type_I", "Universal_Cert"],
-            equipment=["recovery_machine", "gauges", "compressor"],
-            current_latitude=30.2741,
-            current_longitude=-97.7306,
-            shift_start=10,
-            shift_end=19,
-            on_call=True
-        ),
-    ]
+
+    # ---------------- TECHNICIANS ----------------
+    techs = []
+    for i in range(NUM_TECHS):
+        lat, lon = random_location()
+        tech = db.create_technician(
+            name=f"Tech {i+1}",
+            phone=f"512-555-02{str(i+10)}",
+            skills=random.sample(SKILLS_POOL, k=2),
+            certifications=[],
+            equipment=[],
+            current_lat=lat,
+            current_lon=lon,
+            shift_start=random.choice([8,9,10]),
+            shift_end=random.choice([17,18,19]),
+            on_call=random.choice([True, False])
+        )
+        techs.append(tech)
     print(f"✅ Created {len(techs)} technicians")
-    
-    # Create jobs
-    jobs = [
-        db.create_job(
-            customer_id=customers[0].id,
-            title="AC Not Cooling - Emergency",
-            description="AC blowing warm air, 95°F outside",
-            required_skills=["hvac", "residential"],
-            priority=Priority.EMERGENCY,
-            lat=customers[0].latitude,
-            lon=customers[0].longitude,
-            estimated_hours=2.0,
-            equipment_details={"brand": "Carrier", "age_years": 8}
-        ),
-        db.create_job(
-            customer_id=customers[1].id,
-            title="Annual Maintenance",
-            description="Scheduled tune-up",
-            required_skills=["hvac"],
-            priority=Priority.ROUTINE,
-            lat=customers[1].latitude,
-            lon=customers[1].longitude,
-            estimated_hours=1.5,
-            scheduled_for=datetime.utcnow() + timedelta(days=2)
-        ),
-        db.create_job(
-            customer_id=customers[2].id,
-            title="Heater Not Working",
-            description="No heat, clicking sound",
-            required_skills=["hvac", "residential"],
-            priority=Priority.URGENT,
-            lat=customers[2].latitude,
-            lon=customers[2].longitude,
-            estimated_hours=2.5,
-            equipment_details={"brand": "Trane", "age_years": 12}
-        ),
-    ]
+
+    # ---------------- JOBS ----------------
+    jobs = []
+    for i in range(NUM_JOBS):
+        customer = random.choice(customers)
+        lat, lon = random_location()
+        job = db.create_job(
+            customer_id=customer.id,
+            title=f"Job {i+1} for {customer.name}",
+            description="Routine maintenance or repair required",
+            required_skills=random.sample(SKILLS_POOL, k=1),
+            priority=random.choice(list(Priority)),
+            status=random.choice(list(JobStatus)),
+            lat=lat,
+            lon=lon,
+            estimated_hours=round(random.uniform(1, 5), 2),
+            scheduled_for=datetime.utcnow() + timedelta(days=random.randint(1,5))
+        )
+        jobs.append(job)
     print(f"✅ Created {len(jobs)} jobs")
-    
-    print("\n✅ Database seeded successfully!")
-    print(f"   - {len(customers)} customers")
-    print(f"   - {len(techs)} technicians")
-    print(f"   - {len(jobs)} jobs")
+
+    # ---------------- ASSIGNMENTS ----------------
+# ---------------- ASSIGNMENTS ----------------
+    assignments = []
+    for job in jobs:
+        print(f"Trying to assign job {job.id} - {job.title} (skills: {job.required_skills})")
+        assignment = db.auto_assign_job(job.id)
+        if assignment:
+            assignments.append(assignment)
+            print(f"✅ Assigned Job {job.title} to Tech ID {assignment.tech_id}")
+        else:
+            print(f"⚠️ Could not assign Job {job.title} - no suitable tech")
+    print(f"✅ Created {len(assignments)} assignments")
+
+
+    session.close()
+    print("\n🎉 Database seeding complete!")
 
 if __name__ == "__main__":
     seed_database()

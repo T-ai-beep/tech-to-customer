@@ -2,13 +2,15 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Set, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from datetime import datetime
 import json
-import math
+
+# Database imports
 from backend.models import get_engine, get_session, Priority, JobStatus, Assignment
 from backend.database import DatabaseHelper
 
+# ===================== FASTAPI SETUP =====================
 app = FastAPI(
     title="HVAC Dispatch API",
     description="Complete API for HVAC technician scheduling and dispatch management",
@@ -17,22 +19,22 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS middleware - allow WebSocket upgrades from browser
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific domains
+    allow_origins=["*"],  # Restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
-# Database
+# ===================== DATABASE =====================
 engine = get_engine()
 session = get_session(engine)
 db = DatabaseHelper(session)
 
-# ===================== REQUEST/RESPONSE MODELS =====================
+# ===================== REQUEST / RESPONSE MODELS =====================
 class CustomerCreate(BaseModel):
     name: str
     phone: str
@@ -47,8 +49,8 @@ class CustomerResponse(BaseModel):
     name: str
     phone: str
     address: str
-    latitude: float
-    longitude: float
+    lat: float
+    lon: float
     email: Optional[str] = None
 
     class Config:
@@ -63,8 +65,8 @@ class TechnicianCreate(BaseModel):
     shift_start: int = 8
     shift_end: int = 17
     on_call: bool = False
-    current_latitude: Optional[float] = None
-    current_longitude: Optional[float] = None
+    current_lat: Optional[float] = None
+    current_lon: Optional[float] = None
 
 class TechnicianResponse(BaseModel):
     id: int
@@ -75,8 +77,8 @@ class TechnicianResponse(BaseModel):
     shift_start: int
     shift_end: int
     on_call: bool
-    current_latitude: Optional[float]
-    current_longitude: Optional[float]
+    current_lat: Optional[float]
+    current_lon: Optional[float]
     free_at: Optional[datetime]
     active: bool
 
@@ -103,8 +105,8 @@ class JobResponse(BaseModel):
     required_skills: List[str]
     priority: str
     status: str
-    latitude: float
-    longitude: float
+    lat: float
+    lon: float
     submitted_at: datetime
     assigned_to: Optional[int]
     estimated_hours: float
@@ -115,21 +117,20 @@ class JobResponse(BaseModel):
 
 # ===================== CONNECTION MANAGER =====================
 class ConnectionManager:
-    """Manage WebSocket connections by type"""
     def __init__(self):
         self.active_connections: Dict[str, Set[WebSocket]] = {
             "dispatchers": set(),
-            "techs": set()  # all techs
+            "techs": set()
         }
 
     async def connect(self, websocket: WebSocket, client_type: str):
         await websocket.accept()
         self.active_connections.setdefault(client_type, set()).add(websocket)
-        print(f"✅ {client_type} connected. Total: {len(self.active_connections[client_type])}")
+        print(f"{client_type} connected ({len(self.active_connections[client_type])})")
 
     def disconnect(self, websocket: WebSocket, client_type: str):
         self.active_connections.get(client_type, set()).discard(websocket)
-        print(f"❌ {client_type} disconnected. Remaining: {len(self.active_connections.get(client_type, []))}")
+        print(f"{client_type} disconnected ({len(self.active_connections.get(client_type, []))})")
 
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         await websocket.send_json(message)
@@ -143,10 +144,6 @@ class ConnectionManager:
                 disconnected.add(conn)
         for conn in disconnected:
             self.disconnect(conn, client_type)
-
-    async def broadcast_to_all(self, message: dict):
-        for client_type in self.active_connections:
-            await self.broadcast(message, client_type)
 
 manager = ConnectionManager()
 
@@ -210,8 +207,8 @@ def create_technician(tech: TechnicianCreate):
         shift_start=tech.shift_start,
         shift_end=tech.shift_end,
         on_call=tech.on_call,
-        current_latitude=tech.current_latitude,
-        current_longitude=tech.current_longitude
+        current_lat=tech.current_lat,
+        current_lon=tech.current_lon
     )
 
 # ===================== JOB ENDPOINTS =====================
@@ -224,14 +221,6 @@ def get_jobs(status: Optional[str] = None, priority: Optional[str] = None):
     if priority:
         priority_enum = Priority[priority.upper()]
         jobs = [j for j in jobs if j.priority == priority_enum]
-    for job in jobs:
-        job.priority = job.priority.value
-        job.status = job.status.value
-    return jobs
-
-@app.get("/jobs/pending")
-def get_pending_jobs():
-    jobs = db.get_pending_jobs()
     for job in jobs:
         job.priority = job.priority.value
         job.status = job.status.value
@@ -265,181 +254,30 @@ def create_job(job: JobCreate):
     new_job.status = new_job.status.value
     return new_job
 
-# ===================== JOB ASSIGNMENT + BROADCAST =====================
 @app.post("/jobs/{job_id}/auto-assign")
 async def auto_assign_job(job_id: int):
     assignment = db.auto_assign_job(job_id)
     if not assignment:
         raise HTTPException(status_code=400, detail="No available technician found")
-
-    job = db.get_job(job_id)
-    tech = db.get_technician(assignment.tech_id)
-
-    # Broadcast to dispatchers
-    await manager.broadcast({
-        "type": "job_assigned",
-        "job_id": job_id,
-        "job_title": job.title,
-        "tech_id": tech.id,
-        "tech_name": tech.name,
-        "distance_miles": assignment.distance_miles,
-        "travel_time_minutes": assignment.travel_time_hours * 60,
-        "estimated_arrival": job.estimated_arrival.isoformat(),
-        "timestamp": datetime.utcnow().isoformat()
-    }, "dispatchers")
-
-    # Broadcast to all techs
-    await manager.broadcast({
-        "type": "new_assignment",
-        "job_id": job_id,
-        "job_title": job.title,
-        "customer_name": job.customer.name if job.customer else "Unknown",
-        "address": job.address,
-        "priority": job.priority.value,
-        "estimated_hours": job.estimated_hours,
-        "distance_miles": assignment.distance_miles,
-        "timestamp": datetime.utcnow().isoformat()
-    }, "techs")
-
-    return {"message": "Job assigned and broadcasted", "assignment": assignment}
-
-# ===================== JOB STATUS BROADCAST =====================
-@app.put("/jobs/{job_id}/start")
-async def start_job(job_id: int):
-    job = db.start_job(job_id)
-    job.priority = job.priority.value
-    job.status = job.status.value
-    await manager.broadcast({
-        "type": "job_started",
-        "job_id": job_id,
-        "job_title": job.title,
-        "tech_id": job.assigned_to,
-        "started_at": job.started_at.isoformat(),
-        "sla_met": job.sla_met,
-        "timestamp": datetime.utcnow().isoformat()
-    }, "dispatchers")
-    return job
-
-@app.put("/jobs/{job_id}/complete")
-async def complete_job(job_id: int, actual_hours: float):
-    job = db.complete_job(job_id, actual_hours)
-    job.priority = job.priority.value
-    job.status = job.status.value
-    await manager.broadcast({
-        "type": "job_completed",
-        "job_id": job_id,
-        "job_title": job.title,
-        "tech_id": job.assigned_to,
-        "completed_at": job.completed_at.isoformat(),
-        "actual_hours": actual_hours,
-        "sla_met": job.sla_met,
-        "timestamp": datetime.utcnow().isoformat()
-    }, "dispatchers")
-    return job
-
-# ===================== WEBSOCKETS =====================
-@app.websocket("/ws/dispatcher")
-async def websocket_dispatcher(websocket: WebSocket):
-    await manager.connect(websocket, "dispatchers")
-    try:
-        await manager.send_personal_message({
-            "type": "connected",
-            "message": "Connected to HVAC Dispatch",
-            "timestamp": datetime.utcnow().isoformat()
-        }, websocket)
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            if message.get("type") == "ping":
-                await manager.send_personal_message({"type": "pong", "timestamp": datetime.utcnow().isoformat()}, websocket)
-            elif message.get("type") == "request_update":
-                jobs = db.get_pending_jobs()
-                techs = db.get_available_technicians()
-                await manager.send_personal_message({
-                    "type": "full_update",
-                    "data": {"pending_jobs": len(jobs), "available_techs": len(techs)},
-                    "timestamp": datetime.utcnow().isoformat()
-                }, websocket)
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, "dispatchers")
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-        manager.disconnect(websocket, "dispatchers")
-
-@app.websocket("/ws/tech/{tech_id}")
-async def websocket_tech(websocket: WebSocket, tech_id: int):
-    await manager.connect(websocket, "techs")
-    try:
-        await manager.send_personal_message({
-            "type": "connected",
-            "message": f"Connected as Tech {tech_id}",
-            "tech_id": tech_id,
-            "timestamp": datetime.utcnow().isoformat()
-        }, websocket)
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            if message.get("type") == "location_update":
-                lat = message.get("lat")
-                lon = message.get("lon")
-                tech = db.get_technician(tech_id)
-                if tech:
-                    tech.current_latitude = lat
-                    tech.current_longitude = lon
-                    db.db.commit()
-                    await manager.broadcast({
-                        "type": "tech_location_update",
-                        "tech_id": tech_id,
-                        "tech_name": tech.name,
-                        "lat": lat,
-                        "lon": lon,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }, "dispatchers")
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, "techs")
-    except Exception as e:
-        print(f"Tech WebSocket error: {e}")
-        manager.disconnect(websocket, "techs")
-
-# ===================== DASHBOARD & METRICS =====================
-@app.get("/dashboard/stats")
-async def dashboard_stats():
-    """Get dashboard statistics"""
-    try:
-        return db.get_dashboard_stats()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/dashboard/sla")
-async def dashboard_sla(start_date: Optional[str] = Query(None), end_date: Optional[str] = Query(None)):
-    """Get SLA metrics for a date range"""
-    try:
-        sd = None
-        ed = None
-        if start_date:
-            sd = datetime.fromisoformat(start_date)
-        if end_date:
-            ed = datetime.fromisoformat(end_date)
-        return db.get_sla_metrics(start_date=sd, end_date=ed)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format; use ISO8601")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/technicians/{tech_id}/performance")
-async def technician_performance(tech_id: int = Path(..., gt=0)):
-    """Get technician performance metrics"""
-    try:
-        perf = db.get_tech_performance(tech_id)
-        if perf is None:
-            raise HTTPException(status_code=404, detail=f"Technician {tech_id} not found")
-        return perf
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"message": "Job assigned", "assignment": assignment}
 
 # ===================== RUN SERVER =====================
 if __name__ == "__main__":
+    # Optional: seed a job before running server
+    from backend.database import DatabaseHelper
+    db_helper = DatabaseHelper(session)
+    
+    # Example: create a job
+    db_helper.create_job(
+        customer_id=1,
+        title="Fix AC",
+        description="AC not cooling",
+        required_skills=["HVAC"],
+        priority=Priority.ROUTINE,
+        lat=40.7128,
+        lon=-74.0060,
+        estimated_hours=2
+    )
+
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

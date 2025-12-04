@@ -1,155 +1,226 @@
-# models.py
-import os
-from dotenv import load_dotenv
+# backend/models.py
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Boolean, 
-    DateTime, JSON, ForeignKey, Text, Enum as SQLEnum
+    create_engine, Column, Integer, String, Float, Boolean,
+    DateTime, JSON, ForeignKey, Text, Enum as SQLEnum,
+    UniqueConstraint
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 import enum
-
-# Load environment variables
-load_dotenv()
+from dotenv import load_dotenv
 
 Base = declarative_base()
+load_dotenv()
 
-# Enums
+# ===================== ENUMS =====================
 class Priority(enum.Enum):
-    CRITICAL = "critical"
-    EMERGENCY = "emergency"
-    URGENT = "urgent"
-    ROUTINE = "routine"
+    ROUTINE = "Routine"
+    URGENT = "Urgent"
+    HIGH = "High"
+    CRITICAL = "Critical"
+    EMERGENCY = "Emergency"
 
 class JobStatus(enum.Enum):
-    PENDING = "pending"
-    ASSIGNED = "assigned"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+    PENDING = "Pending"
+    ASSIGNED = "Assigned"
+    IN_PROGRESS = "In Progress"
+    COMPLETED = "Completed"
+    CANCELLED = "Cancelled"  # Optional, if you want to track cancellations
 
-# Models
+# ===================== DATABASE =====================
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///./hvac_dispatch.db")
+engine = create_engine(DB_URL, echo=True, future=True)
+SessionLocal = sessionmaker(bind=engine)
+
+def get_engine():
+    return engine
+
+def get_session():
+    return SessionLocal()
+
+def init_db(engine=engine):
+    Base.metadata.create_all(bind=engine)
+
+# ===================== MODELS =====================
+
 class Customer(Base):
-    __tablename__ = 'customers'
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(200), nullable=False)
-    phone = Column(String(20), nullable=False)
-    email = Column(String(200))
-    address = Column(Text)
-    latitude = Column(Float)
-    longitude = Column(Float)
+    __tablename__ = "customers"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    email = Column(String, unique=True)
+    address = Column(String, nullable=False)
+    lat = Column(Float)
+    lon = Column(Float)
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     jobs = relationship("Job", back_populates="customer")
 
+
 class Technician(Base):
-    __tablename__ = 'technicians'
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(200), nullable=False)
-    phone = Column(String(20), nullable=False)
-    email = Column(String(200))
-    skills = Column(JSON, nullable=False, default=list)
-    certifications = Column(JSON, default=list)
-    equipment = Column(JSON, default=list)
+    __tablename__ = "technicians"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    skills = Column(JSON, default=[])
+    certifications = Column(JSON, default=[])
+    equipment = Column(JSON, default=[])
     shift_start = Column(Integer, default=8)
     shift_end = Column(Integer, default=17)
     on_call = Column(Boolean, default=False)
-    current_latitude = Column(Float)
-    current_longitude = Column(Float)
-    free_at = Column(DateTime)
+    current_lat = Column(Float, nullable=True)
+    current_lon = Column(Float, nullable=True)
     active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    assignments = relationship("Assignment", back_populates="technician")
+    free_at = Column(DateTime, default=datetime.utcnow)
 
-class Job(Base):
-    __tablename__ = 'jobs'
-    
+    assignments = relationship("Assignment", back_populates="technician")
+    skill_levels = relationship("TechSkillLevel", back_populates="tech")
+    inventory = relationship("TechInventory", back_populates="tech")
+    performance_metrics = relationship("TechPerformanceMetric", back_populates="tech")
+
+
+class TechSkillLevel(Base):
+    __tablename__ = "tech_skill_levels"
     id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
-    
-    title = Column(String(200))
+    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    skill_name = Column(String, nullable=False)
+    proficiency_level = Column(Integer, nullable=False)  # 1-5 scale
+
+    tech = relationship("Technician", back_populates="skill_levels")
+
+
+# ----------------- JOBS -----------------
+class Job(Base):
+    __tablename__ = "jobs"
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    title = Column(String, nullable=False)
     description = Column(Text)
-    required_skills = Column(JSON, nullable=False)
+    required_skills = Column(JSON, default=[])
     priority = Column(SQLEnum(Priority), nullable=False, default=Priority.ROUTINE)
     status = Column(SQLEnum(JobStatus), nullable=False, default=JobStatus.PENDING)
-    
-    address = Column(Text)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    
-    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    scheduled_for = Column(DateTime)
-    assigned_at = Column(DateTime)
-    started_at = Column(DateTime)
-    completed_at = Column(DateTime)
-    
+    lat = Column(Float)
+    lon = Column(Float)
+    address = Column(String)
     estimated_hours = Column(Float, nullable=False)
-    actual_hours = Column(Float)
-    estimated_arrival = Column(DateTime)
-    
-    assigned_to = Column(Integer, ForeignKey('technicians.id'))
-    
+    equipment_details = Column(JSON, default={})
+    submitted_at = Column(DateTime, default=datetime.utcnow)
     sla_met = Column(Boolean)
-    response_time_hours = Column(Float)
-    
-    equipment_details = Column(JSON)
-    parts_needed = Column(JSON, default=list)
-    
+
     customer = relationship("Customer", back_populates="jobs")
-    assignment = relationship("Assignment", back_populates="job", uselist=False)
+    assignments = relationship("Assignment", back_populates="job")
+    parts = relationship("JobPart", back_populates="job")
+    financial = relationship("JobFinancial", uselist=False, back_populates="job")
+
+
+# ----------------- TECH INVENTORY -----------------
+class TechInventory(Base):
+    __tablename__ = "tech_inventory"
+
+    id = Column(Integer, primary_key=True)
+    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    part_sku = Column(String, nullable=False)
+    quantity = Column(Integer, default=0)
+
+    tech = relationship("Technician", back_populates="inventory")
+
+
+# ----------------- JOB PARTS -----------------
+class JobPart(Base):
+    __tablename__ = "job_parts"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False)
+    part_sku = Column(String, nullable=False)
+    quantity_used = Column(Integer, default=1)
+    unit_cost = Column(Float, default=0)
+    unit_price = Column(Float, default=0)
+
+    job = relationship("Job", back_populates="parts")
+
 
 class Assignment(Base):
-    __tablename__ = 'assignments'
-    
-    id = Column(Integer, primary_key=True)
-    job_id = Column(Integer, ForeignKey('jobs.id'), nullable=False)
-    tech_id = Column(Integer, ForeignKey('technicians.id'), nullable=False)
-    
+    __tablename__ = "assignments"
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False)
+    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
     assigned_at = Column(DateTime, default=datetime.utcnow)
     distance_miles = Column(Float)
     travel_time_hours = Column(Float)
     match_score = Column(Float)
-    
-    job = relationship("Job", back_populates="assignment")
+
+    job = relationship("Job", back_populates="assignments")
     technician = relationship("Technician", back_populates="assignments")
 
-# Database connection functions
-def get_engine(database_url=None):
-    """Create database engine"""
-    if database_url is None:
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            raise ValueError("DATABASE_URL not set in environment")
-    
-    # Handle old postgres:// URLs
-    if database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    
-    return create_engine(
-        database_url,
-        echo=True,
-        pool_pre_ping=True,
-        connect_args={
-            "connect_timeout": 30,
-            "options": "-c statement_timeout=30000"
-        }
+    __table_args__ = (
+        UniqueConstraint('job_id', 'tech_id', name='uix_job_tech'),
     )
 
-def get_session(engine):
-    """Create database session"""
-    Session = sessionmaker(bind=engine)
-    return Session()
 
-def init_db(engine):
-    """Create all tables"""
-    Base.metadata.create_all(engine)
-    print("✅ Database tables created successfully")
+# ----------------- JOB FINANCIALS -----------------
+class JobFinancial(Base):
+    __tablename__ = "job_financials"
 
-if __name__ == "__main__":
-    engine = get_engine()
-    init_db(engine)
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, unique=True)
+
+    labor_rate_per_hour = Column(Float, default=0)
+    labor_hours_charged = Column(Float, default=0)
+    labor_revenue = Column(Float, default=0)
+    parts_revenue = Column(Float, default=0)
+    total_revenue = Column(Float, default=0)
+
+    tech_hourly_cost = Column(Float, default=0)
+    labor_cost = Column(Float, default=0)
+    parts_cost = Column(Float, default=0)
+    fuel_cost = Column(Float, default=0)
+    overhead_cost = Column(Float, default=0)
+    total_cost = Column(Float, default=0)
+
+    gross_profit = Column(Float, default=0)
+    gross_margin_pct = Column(Float, default=0)
+    calculated_at = Column(DateTime, default=datetime.utcnow)
+
+    job = relationship("Job", back_populates="financial")
+
+
+# ----------------- TECH PERFORMANCE METRICS -----------------
+class TechPerformanceMetric(Base):
+    __tablename__ = "tech_performance_metric"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    date = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    shift_hours = Column(Float, default=8)
+    billable_hours = Column(Float, default=0)
+    drive_time_hours = Column(Float, default=0)
+    idle_time_hours = Column(Float, default=0)
+
+    jobs_completed = Column(Integer, default=0)
+    jobs_cancelled = Column(Integer, default=0)
+    callbacks = Column(Integer, default=0)
+    revenue_generated = Column(Float, default=0)
+    avg_job_value = Column(Float, default=0)
+    utilization_rate = Column(Float, default=0)
+    first_time_fix_rate = Column(Float, default=0)
+
+    tech = relationship("Technician", back_populates="performance_metrics")
+
+
+# ===================== EXPORTS =====================
+__all__ = [
+    "Customer",
+    "Technician",
+    "TechSkillLevel",
+    "TechInventory",
+    "Job",
+    "JobPart",
+    "Assignment",
+    "JobFinancial",
+    "TechPerformanceMetric",
+    "Priority",
+    "JobStatus"
+]
