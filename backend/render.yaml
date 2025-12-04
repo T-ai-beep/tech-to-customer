@@ -10,7 +10,7 @@ services:
           name: hvac-dispatch-db
           property: connectionString
       - key: PYTHON_VERSION
-        value: 3.14.0
+        value: 3.11.0  # Changed from 3.14.0 (which doesn't exist)
 
 databases:
   - name: hvac-dispatch-db

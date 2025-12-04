@@ -1,12 +1,11 @@
 """
 Calculate job profitability and financial metrics
 """
-from typing import Optional
-from datetime import datetime
-from sqlalchemy.orm import Session
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
+from sqlalchemy.orm import Session
 
-from .models import Job, JobFinancial, JobPart, Technician
+from backend.models import Job, JobFinancial, JobPart, Technician, JobStatus, Assignment
 
 import logging
 
@@ -19,8 +18,7 @@ class FinancialCalculator:
     def __init__(self, session: Session):
         self.db = session
         
-        # Default rates (should be configurable per company)
-        self.default_labor_rate = 95.0  # $/hour to customer
+        # Default rates
         self.default_fuel_cost_per_mile = 0.65
         self.default_overhead_rate = 0.15  # 15% of revenue
     
@@ -35,9 +33,17 @@ class FinancialCalculator:
             logger.warning(f"Job {job_id} not completed, cannot calculate financials")
             return None
         
-        # Get technician
+        # Get technician through assignment
+        assignment = self.db.query(Assignment).filter(
+            Assignment.job_id == job_id
+        ).first()
+        
+        if not assignment:
+            logger.error(f"No assignment found for job {job_id}")
+            return None
+            
         tech = self.db.query(Technician).filter(
-            Technician.id == job.assigned_to
+            Technician.id == assignment.tech_id
         ).first()
         
         if not tech:
@@ -46,9 +52,9 @@ class FinancialCalculator:
         
         # ============ REVENUE ============
         
-        # Labor revenue
-        labor_rate = tech.hourly_rate or self.default_labor_rate
-        labor_hours = job.actual_hours or job.estimated_hours
+        # Labor revenue (use tech's hourly rate)
+        labor_rate = tech.hourly_rate
+        labor_hours = job.actual_hours or job.estimated_hours or 0
         labor_revenue = labor_rate * labor_hours
         
         # Parts revenue
@@ -61,8 +67,8 @@ class FinancialCalculator:
         
         # ============ COSTS ============
         
-        # Labor cost
-        tech_cost = tech.hourly_cost or 35.0
+        # Labor cost (use tech's hourly cost)
+        tech_cost = tech.hourly_cost
         labor_cost = tech_cost * labor_hours
         
         # Parts cost
@@ -71,11 +77,8 @@ class FinancialCalculator:
         )
         
         # Fuel cost
-        if job.assignment:
-            distance = job.assignment.distance_miles
-            fuel_cost = distance * self.default_fuel_cost_per_mile
-        else:
-            fuel_cost = 0
+        distance = assignment.distance_miles or 0
+        fuel_cost = distance * self.default_fuel_cost_per_mile
         
         # Overhead (allocated)
         overhead_cost = total_revenue * self.default_overhead_rate
@@ -125,7 +128,7 @@ class FinancialCalculator:
         
         return financial
     
-    def calculate_profitability_by_job_type(self) -> list:
+    def calculate_profitability_by_job_type(self) -> List[Dict[str, any]]:
         """
         Analyze which types of jobs are most profitable
         """
@@ -134,7 +137,7 @@ class FinancialCalculator:
         ).all()
         
         # Group by title (proxy for job type)
-        job_types = {}
+        job_types: Dict[str, Dict[str, any]] = {}
         
         for job in jobs:
             if not job.financial:
@@ -145,9 +148,8 @@ class FinancialCalculator:
             if job_type not in job_types:
                 job_types[job_type] = {
                     "count": 0,
-                    "total_revenue": 0,
-                    "total_profit": 0,
-                    "avg_margin": 0
+                    "total_revenue": 0.0,
+                    "total_profit": 0.0
                 }
             
             job_types[job_type]["count"] += 1

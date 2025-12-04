@@ -27,7 +27,7 @@ class JobStatus(enum.Enum):
     ASSIGNED = "Assigned"
     IN_PROGRESS = "In Progress"
     COMPLETED = "Completed"
-    CANCELLED = "Cancelled"  # Optional, if you want to track cancellations
+    CANCELLED = "Cancelled"
 
 # ===================== DATABASE =====================
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///./hvac_dispatch.db")
@@ -74,6 +74,8 @@ class Technician(Base):
     current_lon = Column(Float, nullable=True)
     active = Column(Boolean, default=True)
     free_at = Column(DateTime, default=datetime.utcnow)
+    hourly_rate = Column(Float, default=95.0)  # ADDED: Charged to customer
+    hourly_cost = Column(Float, default=35.0)  # ADDED: Company cost for tech
 
     assignments = relationship("Assignment", back_populates="technician")
     skill_levels = relationship("TechSkillLevel", back_populates="tech")
@@ -91,7 +93,16 @@ class TechSkillLevel(Base):
     tech = relationship("Technician", back_populates="skill_levels")
 
 
-# ----------------- JOBS -----------------
+class TechInventory(Base):
+    __tablename__ = "tech_inventory"
+    id = Column(Integer, primary_key=True)
+    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    part_sku = Column(String, nullable=False)
+    quantity = Column(Integer, default=0)
+
+    tech = relationship("Technician", back_populates="inventory")
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id = Column(Integer, primary_key=True, index=True)
@@ -105,9 +116,14 @@ class Job(Base):
     lon = Column(Float)
     address = Column(String)
     estimated_hours = Column(Float, nullable=False)
+    actual_hours = Column(Float)  # ADDED: Track actual hours spent
     equipment_details = Column(JSON, default={})
     submitted_at = Column(DateTime, default=datetime.utcnow)
+    assigned_at = Column(DateTime)
+    started_at = Column(DateTime)  # ADDED
+    completed_at = Column(DateTime)  # ADDED
     sla_met = Column(Boolean)
+    is_callback = Column(Boolean, default=False)  # ADDED
 
     customer = relationship("Customer", back_populates="jobs")
     assignments = relationship("Assignment", back_populates="job")
@@ -115,22 +131,8 @@ class Job(Base):
     financial = relationship("JobFinancial", uselist=False, back_populates="job")
 
 
-# ----------------- TECH INVENTORY -----------------
-class TechInventory(Base):
-    __tablename__ = "tech_inventory"
-
-    id = Column(Integer, primary_key=True)
-    tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
-    part_sku = Column(String, nullable=False)
-    quantity = Column(Integer, default=0)
-
-    tech = relationship("Technician", back_populates="inventory")
-
-
-# ----------------- JOB PARTS -----------------
 class JobPart(Base):
     __tablename__ = "job_parts"
-
     id = Column(Integer, primary_key=True)
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False)
     part_sku = Column(String, nullable=False)
@@ -159,10 +161,8 @@ class Assignment(Base):
     )
 
 
-# ----------------- JOB FINANCIALS -----------------
 class JobFinancial(Base):
     __tablename__ = "job_financials"
-
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, unique=True)
 
@@ -186,10 +186,8 @@ class JobFinancial(Base):
     job = relationship("Job", back_populates="financial")
 
 
-# ----------------- TECH PERFORMANCE METRICS -----------------
 class TechPerformanceMetric(Base):
-    __tablename__ = "tech_performance_metric"
-
+    __tablename__ = "tech_performance_metrics"  # FIXED: plural name
     id = Column(Integer, primary_key=True, index=True)
     tech_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
     date = Column(DateTime, default=datetime.utcnow, nullable=False)

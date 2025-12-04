@@ -3,12 +3,12 @@ Calculate and track technician performance metrics
 """
 from typing import Dict, List
 from datetime import datetime, date, timedelta
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from .models import (
+from backend.models import (
     Technician, Job, JobStatus, TechPerformanceMetric,
-    JobFinancial
+    JobFinancial, Assignment
 )
 
 import logging
@@ -30,18 +30,21 @@ class PerformanceTracker:
         """
         Calculate all performance metrics for a tech for a specific day
         """
-        # Query all jobs for this tech on this day
+        # Query all assignments for this tech on this day
         start_of_day = datetime.combine(target_date, datetime.min.time())
         end_of_day = datetime.combine(target_date, datetime.max.time())
         
-        jobs = self.db.query(Job).filter(
-            Job.assigned_to == tech_id,
-            Job.assigned_at >= start_of_day,
-            Job.assigned_at <= end_of_day
-        ).all()
+        assignments = self.db.query(Assignment).filter(
+            Assignment.tech_id == tech_id,
+            Assignment.assigned_at >= start_of_day,
+            Assignment.assigned_at <= end_of_day
+        ).options(joinedload(Assignment.job)).all()
+        
+        # Get jobs from assignments
+        jobs = [ass.job for ass in assignments if ass.job]
         
         # Initialize counters
-        shift_hours = 8.0  # Standard shift
+        shift_hours = 8.0
         billable_hours = 0
         drive_time_hours = 0
         jobs_completed = 0
@@ -49,12 +52,15 @@ class PerformanceTracker:
         callbacks = 0
         revenue_generated = 0
         
-        for job in jobs:
+        for assignment in assignments:
+            job = assignment.job
+            if not job:
+                continue
+                
             try:
-                # Use .is_() for SQLAlchemy enum comparison instead of ==
-                if job.status.is_(JobStatus.COMPLETED):  # type: ignore
+                if job.status == JobStatus.COMPLETED:
                     jobs_completed += 1
-                    billable_hours += job.actual_hours or job.estimated_hours
+                    billable_hours += job.actual_hours or job.estimated_hours or 0
                     
                     # Check if callback
                     if job.is_callback:
@@ -64,18 +70,17 @@ class PerformanceTracker:
                     if job.financial:
                         revenue_generated += job.financial.total_revenue or 0
                 
-                elif job.status.is_(JobStatus.CANCELLED):  # type: ignore
+                elif job.status == JobStatus.CANCELLED:
                     jobs_cancelled += 1
-            except:
-                pass
-            
-            # Calculate drive time from assignment record
-            if job.assignment:
-                drive_time_hours += job.assignment.travel_time_hours or 0
+                    
+                # Add travel time
+                drive_time_hours += assignment.travel_time_hours or 0
+                    
+            except Exception as e:
+                logger.error(f"Error processing job {job.id}: {e}")
         
         # Calculate idle time
-        idle_time_hours = shift_hours - billable_hours - drive_time_hours
-        idle_time_hours = max(0, idle_time_hours)
+        idle_time_hours = max(0, shift_hours - billable_hours - drive_time_hours)
         
         # Calculate rates
         utilization_rate = (billable_hours / shift_hours) if shift_hours > 0 else 0
@@ -103,17 +108,17 @@ class PerformanceTracker:
             self.db.add(metric)
         
         # Update all fields
-        metric.shift_hours = shift_hours  # type: ignore
-        metric.billable_hours = billable_hours  # type: ignore
-        metric.drive_time_hours = drive_time_hours  # type: ignore
-        metric.idle_time_hours = idle_time_hours  # type: ignore
-        metric.jobs_completed = jobs_completed  # type: ignore
-        metric.jobs_cancelled = jobs_cancelled  # type: ignore
-        metric.callbacks = callbacks  # type: ignore
-        metric.revenue_generated = revenue_generated  # type: ignore
-        metric.avg_job_value = avg_job_value  # type: ignore
-        metric.utilization_rate = utilization_rate  # type: ignore
-        metric.first_time_fix_rate = first_time_fix_rate  # type: ignore
+        metric.shift_hours = shift_hours
+        metric.billable_hours = billable_hours
+        metric.drive_time_hours = drive_time_hours
+        metric.idle_time_hours = idle_time_hours
+        metric.jobs_completed = jobs_completed
+        metric.jobs_cancelled = jobs_cancelled
+        metric.callbacks = callbacks
+        metric.revenue_generated = revenue_generated
+        metric.avg_job_value = avg_job_value
+        metric.utilization_rate = utilization_rate
+        metric.first_time_fix_rate = first_time_fix_rate
         
         self.db.commit()
         self.db.refresh(metric)
@@ -151,9 +156,9 @@ class PerformanceTracker:
         return {
             "date": target_date.isoformat(),
             "tech_count": len(metrics),
-            "total_revenue": round(float(total_revenue), 2),  # type: ignore
-            "avg_utilization": round(float(avg_utilization), 3),  # type: ignore
-            "avg_ftf_rate": round(float(avg_ftf), 3),  # type: ignore
+            "total_revenue": round(total_revenue, 2),
+            "avg_utilization": round(avg_utilization, 3),
+            "avg_ftf_rate": round(avg_ftf, 3),
             "metrics": [
                 {
                     "tech_id": m.tech_id,

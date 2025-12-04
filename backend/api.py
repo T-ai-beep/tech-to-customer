@@ -1,13 +1,12 @@
 # api.py
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Path
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Set, List, Optional
+from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
-import json
 
 # Database imports
-from backend.models import get_engine, get_session, Priority, JobStatus, Assignment
+from backend.models import get_engine, get_session, Priority, JobStatus
 from backend.database import DatabaseHelper
 
 # ===================== FASTAPI SETUP =====================
@@ -31,7 +30,7 @@ app.add_middleware(
 
 # ===================== DATABASE =====================
 engine = get_engine()
-session = get_session(engine)
+session = get_session()
 db = DatabaseHelper(session)
 
 # ===================== REQUEST / RESPONSE MODELS =====================
@@ -67,6 +66,8 @@ class TechnicianCreate(BaseModel):
     on_call: bool = False
     current_lat: Optional[float] = None
     current_lon: Optional[float] = None
+    hourly_rate: Optional[float] = 95.0
+    hourly_cost: Optional[float] = 35.0
 
 class TechnicianResponse(BaseModel):
     id: int
@@ -81,6 +82,8 @@ class TechnicianResponse(BaseModel):
     current_lon: Optional[float]
     free_at: Optional[datetime]
     active: bool
+    hourly_rate: float
+    hourly_cost: float
 
     class Config:
         from_attributes = True
@@ -108,44 +111,14 @@ class JobResponse(BaseModel):
     lat: float
     lon: float
     submitted_at: datetime
-    assigned_to: Optional[int]
     estimated_hours: float
+    actual_hours: Optional[float]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
     sla_met: Optional[bool]
 
     class Config:
         from_attributes = True
-
-# ===================== CONNECTION MANAGER =====================
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {
-            "dispatchers": set(),
-            "techs": set()
-        }
-
-    async def connect(self, websocket: WebSocket, client_type: str):
-        await websocket.accept()
-        self.active_connections.setdefault(client_type, set()).add(websocket)
-        print(f"{client_type} connected ({len(self.active_connections[client_type])})")
-
-    def disconnect(self, websocket: WebSocket, client_type: str):
-        self.active_connections.get(client_type, set()).discard(websocket)
-        print(f"{client_type} disconnected ({len(self.active_connections.get(client_type, []))})")
-
-    async def send_personal_message(self, message: dict, websocket: WebSocket):
-        await websocket.send_json(message)
-
-    async def broadcast(self, message: dict, client_type: str):
-        disconnected = set()
-        for conn in self.active_connections.get(client_type, set()):
-            try:
-                await conn.send_json(message)
-            except:
-                disconnected.add(conn)
-        for conn in disconnected:
-            self.disconnect(conn, client_type)
-
-manager = ConnectionManager()
 
 # ===================== HEALTH =====================
 @app.get("/")
@@ -198,86 +171,191 @@ def get_technician(tech_id: int):
 
 @app.post("/technicians", response_model=TechnicianResponse, status_code=201)
 def create_technician(tech: TechnicianCreate):
-    return db.create_technician(
-        name=tech.name,
-        phone=tech.phone,
-        skills=tech.skills,
-        certifications=tech.certifications,
-        equipment=tech.equipment,
-        shift_start=tech.shift_start,
-        shift_end=tech.shift_end,
-        on_call=tech.on_call,
-        current_lat=tech.current_lat,
-        current_lon=tech.current_lon
-    )
+    from backend.models import Technician as TechModel
+    
+    try:
+        new_tech = TechModel(
+            name=tech.name,
+            phone=tech.phone,
+            skills=tech.skills,
+            certifications=tech.certifications or [],
+            equipment=tech.equipment or [],
+            shift_start=tech.shift_start,
+            shift_end=tech.shift_end,
+            on_call=tech.on_call,
+            current_lat=tech.current_lat,
+            current_lon=tech.current_lon,
+            hourly_rate=tech.hourly_rate or 95.0,
+            hourly_cost=tech.hourly_cost or 35.0,
+            active=True
+        )
+        session.add(new_tech)
+        session.commit()
+        session.refresh(new_tech)
+        return new_tech
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ===================== JOB ENDPOINTS =====================
 @app.get("/jobs")
 def get_jobs(status: Optional[str] = None, priority: Optional[str] = None):
     jobs = db.get_all_jobs()
-    if status:
-        status_enum = JobStatus[status.upper()]
-        jobs = [j for j in jobs if j.status == status_enum]
-    if priority:
-        priority_enum = Priority[priority.upper()]
-        jobs = [j for j in jobs if j.priority == priority_enum]
+    
+    # Convert enum values to strings for JSON serialization
+    result = []
     for job in jobs:
-        job.priority = job.priority.value
-        job.status = job.status.value
-    return jobs
+        job_dict = {
+            "id": job.id,
+            "customer_id": job.customer_id,
+            "title": job.title,
+            "description": job.description,
+            "required_skills": job.required_skills,
+            "priority": job.priority.value,
+            "status": job.status.value,
+            "lat": job.lat,
+            "lon": job.lon,
+            "submitted_at": job.submitted_at,
+            "estimated_hours": job.estimated_hours,
+            "actual_hours": job.actual_hours,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+            "sla_met": job.sla_met
+        }
+        
+        # Filter by status if provided
+        if status and job.status.value.lower() != status.lower():
+            continue
+            
+        # Filter by priority if provided
+        if priority and job.priority.value.lower() != priority.lower():
+            continue
+            
+        result.append(job_dict)
+    
+    return result
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: int):
     job = db.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    job.priority = job.priority.value
-    job.status = job.status.value
-    return job
+    
+    # Get assignment info
+    assignment = db.get_assignment_by_job(job_id)
+    assigned_tech_id = assignment.tech_id if assignment else None
+    
+    return {
+        "id": job.id,
+        "customer_id": job.customer_id,
+        "title": job.title,
+        "description": job.description,
+        "required_skills": job.required_skills,
+        "priority": job.priority.value,
+        "status": job.status.value,
+        "lat": job.lat,
+        "lon": job.lon,
+        "submitted_at": job.submitted_at,
+        "estimated_hours": job.estimated_hours,
+        "actual_hours": job.actual_hours,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at,
+        "sla_met": job.sla_met,
+        "assigned_tech_id": assigned_tech_id
+    }
 
 @app.post("/jobs", status_code=201)
 def create_job(job: JobCreate):
-    priority_enum = Priority[job.priority.upper()]
-    new_job = db.create_job(
-        customer_id=job.customer_id,
-        title=job.title,
-        required_skills=job.required_skills,
-        priority=priority_enum,
-        lat=job.lat,
-        lon=job.lon,
-        estimated_hours=job.estimated_hours,
-        description=job.description,
-        address=job.address,
-        equipment_details=job.equipment_details
-    )
-    new_job.priority = new_job.priority.value
-    new_job.status = new_job.status.value
-    return new_job
+    try:
+        # Convert string priority to enum
+        priority_map = {
+            "routine": Priority.ROUTINE,
+            "urgent": Priority.URGENT,
+            "high": Priority.HIGH,
+            "critical": Priority.CRITICAL,
+            "emergency": Priority.EMERGENCY
+        }
+        
+        priority_enum = priority_map.get(job.priority.lower())
+        if not priority_enum:
+            raise HTTPException(status_code=400, detail="Invalid priority")
+        
+        new_job = db.create_job(
+            customer_id=job.customer_id,
+            title=job.title,
+            required_skills=job.required_skills,
+            priority=priority_enum,
+            lat=job.lat,
+            lon=job.lon,
+            estimated_hours=job.estimated_hours,
+            description=job.description,
+            address=job.address,
+            equipment_details=job.equipment_details
+        )
+        
+        return {
+            "id": new_job.id,
+            "title": new_job.title,
+            "priority": new_job.priority.value,
+            "status": new_job.status.value,
+            "message": "Job created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/jobs/{job_id}/auto-assign")
-async def auto_assign_job(job_id: int):
+def auto_assign_job(job_id: int):
     assignment = db.auto_assign_job(job_id)
     if not assignment:
         raise HTTPException(status_code=400, detail="No available technician found")
-    return {"message": "Job assigned", "assignment": assignment}
+    
+    return {
+        "message": "Job assigned successfully",
+        "assignment_id": assignment.id,
+        "tech_id": assignment.tech_id,
+        "match_score": assignment.match_score,
+        "distance_miles": assignment.distance_miles
+    }
+
+@app.post("/jobs/{job_id}/start")
+def start_job(job_id: int):
+    job = db.start_job(job_id)
+    if not job:
+        raise HTTPException(status_code=400, detail="Could not start job")
+    
+    return {"message": "Job started", "job_id": job_id, "status": job.status.value}
+
+@app.post("/jobs/{job_id}/complete")
+def complete_job(job_id: int, actual_hours: float):
+    job = db.complete_job(job_id, actual_hours)
+    if not job:
+        raise HTTPException(status_code=400, detail="Could not complete job")
+    
+    return {
+        "message": "Job completed",
+        "job_id": job_id,
+        "status": job.status.value,
+        "actual_hours": actual_hours
+    }
+
+# ===================== DASHBOARD ENDPOINTS =====================
+@app.get("/dashboard/stats")
+def get_dashboard_stats():
+    return db.get_dashboard_stats()
+
+@app.get("/dashboard/sla-metrics")
+def get_sla_metrics(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    from datetime import datetime as dt
+    
+    start = dt.fromisoformat(start_date) if start_date else None
+    end = dt.fromisoformat(end_date) if end_date else None
+    
+    return db.get_sla_metrics(start, end)
 
 # ===================== RUN SERVER =====================
 if __name__ == "__main__":
-    # Optional: seed a job before running server
-    from backend.database import DatabaseHelper
-    db_helper = DatabaseHelper(session)
-    
-    # Example: create a job
-    db_helper.create_job(
-        customer_id=1,
-        title="Fix AC",
-        description="AC not cooling",
-        required_skills=["HVAC"],
-        priority=Priority.ROUTINE,
-        lat=40.7128,
-        lon=-74.0060,
-        estimated_hours=2
-    )
-
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,6 +1,5 @@
 from datetime import datetime
-from backend.database import get_session
-from backend.models import Technician, TechPerformanceMetric
+from backend.models import Technician, TechPerformanceMetric, get_session
 from init_db import init_db
 
 # Initialize DB (creates tables if not exist)

@@ -52,7 +52,10 @@ def seed_database():
     techs = []
     for i in range(NUM_TECHS):
         lat, lon = random_location()
-        tech = db.create_technician(
+        
+        # Create technician directly with all fields
+        from backend.models import Technician as TechModel
+        tech = TechModel(
             name=f"Tech {i+1}",
             phone=f"512-555-02{str(i+10)}",
             skills=random.sample(SKILLS_POOL, k=2),
@@ -62,8 +65,14 @@ def seed_database():
             current_lon=lon,
             shift_start=random.choice([8,9,10]),
             shift_end=random.choice([17,18,19]),
-            on_call=random.choice([True, False])
+            on_call=random.choice([True, False]),
+            hourly_rate=random.uniform(80, 120),
+            hourly_cost=random.uniform(25, 45),
+            active=True
         )
+        session.add(tech)
+        session.commit()
+        session.refresh(tech)
         techs.append(tech)
     print(f"✅ Created {len(techs)} technicians")
 
@@ -78,20 +87,17 @@ def seed_database():
             description="Routine maintenance or repair required",
             required_skills=random.sample(SKILLS_POOL, k=1),
             priority=random.choice(list(Priority)),
-            status=random.choice(list(JobStatus)),
             lat=lat,
             lon=lon,
-            estimated_hours=round(random.uniform(1, 5), 2),
-            scheduled_for=datetime.utcnow() + timedelta(days=random.randint(1,5))
+            estimated_hours=round(random.uniform(1, 5), 2)
         )
         jobs.append(job)
     print(f"✅ Created {len(jobs)} jobs")
 
     # ---------------- ASSIGNMENTS ----------------
-# ---------------- ASSIGNMENTS ----------------
     assignments = []
     for job in jobs:
-        print(f"Trying to assign job {job.id} - {job.title} (skills: {job.required_skills})")
+        print(f"Trying to assign job {job.id} - {job.title}")
         assignment = db.auto_assign_job(job.id)
         if assignment:
             assignments.append(assignment)
@@ -99,7 +105,6 @@ def seed_database():
         else:
             print(f"⚠️ Could not assign Job {job.title} - no suitable tech")
     print(f"✅ Created {len(assignments)} assignments")
-
 
     session.close()
     print("\n🎉 Database seeding complete!")

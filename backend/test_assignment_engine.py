@@ -1,10 +1,7 @@
 # backend/test_assignment_engine.py
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
-from backend.models import (
-    Base, Technician, TechSkillLevel, Job, Priority, Assignment
-)
+from backend.models import Base, Technician, TechSkillLevel, Job, Priority
 from backend.assignment_engine import AssignmentEngine
 
 # ----------------- SETUP IN-MEMORY DB -----------------
@@ -18,7 +15,9 @@ tech1 = Technician(
     name="Alice",
     phone="555-1111",
     current_lat=37.7749,
-    current_lon=-122.4194
+    current_lon=-122.4194,
+    hourly_rate=100.0,
+    hourly_cost=40.0
 )
 tech1.skill_levels = [
     TechSkillLevel(skill_name="HVAC", proficiency_level=5),
@@ -29,7 +28,9 @@ tech2 = Technician(
     name="Bob",
     phone="555-2222",
     current_lat=37.8044,
-    current_lon=-122.2711
+    current_lon=-122.2711,
+    hourly_rate=90.0,
+    hourly_cost=35.0
 )
 tech2.skill_levels = [
     TechSkillLevel(skill_name="HVAC", proficiency_level=2),
@@ -54,12 +55,13 @@ session.commit()
 
 # ----------------- RUN ASSIGNMENT ENGINE -----------------
 engine_obj = AssignmentEngine(session)
-result = engine_obj.find_best_technician(int(job1.id))  # type: ignore
+result = engine_obj.find_best_technician(job1.id)
 
 if result:
     tech, score, breakdown = result
     print(f"Best Tech: {tech.name}")
-    print(f"Score: {score}")
-    print("Breakdown:", breakdown)
+    print(f"Score: {score:.2f}")
+    print("Breakdown:", {k: f"{v:.2f}" if isinstance(v, float) else v 
+                        for k, v in breakdown.items()})
 else:
-    print("No suitable technician found.")                
+    print("No suitable technician found.")
